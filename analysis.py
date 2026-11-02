@@ -4,8 +4,7 @@ import math
 import statistics
 from concurrent.futures import ThreadPoolExecutor
 
-import yfinance as yf
-
+import market
 import sec
 
 WINDOWS = (3, 5, 10)
@@ -126,57 +125,54 @@ def window_summary(yearly):
     return usual, growth
 
 
-def today_values(info, latest, price):
-    """Current ratios: price-based ones use today's price, business ones use the latest fiscal year."""
-    shares = num(info.get("sharesOutstanding")) or (latest or {}).get("shares")
-    market_cap = num(info.get("marketCap")) or (price * shares if shares else None)
+def ratios_from(fig, price):
+    """Ratios from one year of figures and a share price (used for competitors, from the SEC's all-company files)."""
+    eps, dps, shares = fig.get("eps"), fig.get("dividends_per_share"), fig.get("shares")
+    market_cap = price * shares if price and shares else None
+    fcf = fig["operating_cash_flow"] - fig["capex"] if None not in (fig.get("operating_cash_flow"), fig.get("capex")) else None
+    return market_cap, {
+        "pe": div(price, eps) if eps and eps > 0 else None,
+        "ps": div(market_cap, fig.get("revenue")),
+        "pfcf": div(market_cap, fcf) if fcf and fcf > 0 else None,
+        "div_yield": div(dps, price) if dps else 0,
+        "gross_margin": div(fig.get("gross_profit"), fig.get("revenue")),
+        "op_margin": div(fig.get("operating_income"), fig.get("revenue")),
+        "net_margin": div(fig.get("net_income"), fig.get("revenue")),
+        "payout": div(dps, eps) if dps and eps and eps > 0 else None,
+    }
+
+
+def today_values(latest, price):
+    """Today's ratios: today's price against the latest fiscal year's results from the filings."""
     latest = latest or {}
-    dps = num(info.get("dividendRate"))
+    market_cap = price * latest["shares"] if latest.get("shares") else None
     values = {
-        "pe": num(info.get("trailingPE")) or div(price, latest.get("eps")),
-        "ps": num(info.get("priceToSalesTrailing12Months")) or div(market_cap, latest.get("revenue")),
+        "pe": div(price, latest.get("eps")) if (latest.get("eps") or 0) > 0 else None,
+        "ps": div(market_cap, latest.get("revenue")),
         "pfcf": div(market_cap, latest.get("fcf")) if (latest.get("fcf") or 0) > 0 else None,
-        "div_yield": div(dps, price) if dps is not None else (num(info.get("dividendYield")) or 0) / 100,
+        "div_yield": div(latest.get("dividends_per_share"), price) if latest.get("dividends_per_share") else 0,
     }
     for key in ("gross_margin", "op_margin", "net_margin", "roic", "debt_years", "interest_cover", "payout"):
         values[key] = latest.get(key)
-    if not latest:  # no SEC history (e.g. non-US company): fall back to Yahoo's snapshot
-        values.update(gross_margin=num(info.get("grossMargins")), op_margin=num(info.get("operatingMargins")),
-                      net_margin=num(info.get("profitMargins")), payout=num(info.get("payoutRatio")))
-    return values
+    return values, market_cap
 
 
-def peer_snapshot(ticker):
-    info = yf.Ticker(ticker).info or {}
-    price = num(info.get("currentPrice") or info.get("regularMarketPrice"))
-    if price is None:
+def peer_snapshot(cik, ticker, name):
+    price = market.latest_close(ticker)
+    if not price:
         return None
-    fcf, mcap = num(info.get("freeCashflow")), num(info.get("marketCap"))
-    dps = num(info.get("dividendRate"))
-    return {
-        "ticker": ticker, "name": info.get("shortName") or ticker, "market_cap": mcap,
-        "values": {
-            "pe": num(info.get("trailingPE")),
-            "ps": num(info.get("priceToSalesTrailing12Months")),
-            "pfcf": div(mcap, fcf) if fcf and fcf > 0 else None,
-            "div_yield": div(dps, price) if dps is not None else 0,
-            "gross_margin": num(info.get("grossMargins")),
-            "op_margin": num(info.get("operatingMargins")),
-            "net_margin": num(info.get("profitMargins")),
-            "revenue_growth": num(info.get("revenueGrowth")),
-            "payout": num(info.get("payoutRatio")),
-        },
-    }
+    market_cap, values = ratios_from(sec.frame_values(cik), price)
+    return {"ticker": ticker, "name": name, "market_cap": market_cap, "values": values}
 
 
-def peers_for(ticker, industry_key, limit=5):
+def peers_for(cik, limit=5):
     try:
-        top = yf.Industry(industry_key).top_companies if industry_key else None
-    except Exception:
-        top = None
-    symbols = [s for s in (list(top.index) if top is not None else []) if s.upper() != ticker.upper()][:limit]
-    with ThreadPoolExecutor(max_workers=limit or 1) as pool:
-        snaps = [s for s in pool.map(_safe_peer, symbols) if s]
+        # A few extra candidates, since some (e.g. odd fiscal years) are missing from the SEC's calendar-year files.
+        found = sec.competitors(cik, limit + 3) if cik else []
+    except Exception:  # the SEC is sometimes slow; the page still works without competitors
+        found = []
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        snaps = [s for s in pool.map(lambda c: _safe_peer(*c), found) if s and s["market_cap"]][:limit]
     medians = {}
     for _, key, *_ in RATIOS:
         values = [p["values"].get(key) for p in snaps if p["values"].get(key) is not None]
@@ -184,57 +180,51 @@ def peers_for(ticker, industry_key, limit=5):
     return {"companies": snaps, "median": medians}
 
 
-def _safe_peer(symbol):
+def _safe_peer(cik, ticker, name):
     try:
-        return peer_snapshot(symbol)
-    except Exception:
+        return peer_snapshot(cik, ticker, name)
+    except (market.MarketDataError, OSError):
         return None
-
-
-def monthly(ticker, period="max"):
-    """[(YYYY-MM-DD, close, total-return close)] month by month."""
-    h = yf.Ticker(ticker).history(period=period, interval="1mo", auto_adjust=False)
-    rows = []
-    for when, r in h.iterrows():
-        close, adj = num(r.get("Close")), num(r.get("Adj Close"))
-        if close is not None and adj is not None:
-            rows.append((when.strftime("%Y-%m-%d"), close, adj))
-    return rows
 
 
 def build(ticker):
-    t = yf.Ticker(ticker)
-    info = t.info or {}
-    price = num(info.get("currentPrice") or info.get("regularMarketPrice"))
-    if price is None:
+    info = market.meta(ticker)
+    if not info:
         return None
+    prices, splits = market.monthly_prices(ticker)
+    if not prices:
+        return None
+    benchmark, _ = market.monthly_prices("SPY")
+    price = market.latest_close(ticker) or prices[-1][1]
 
-    prices = monthly(ticker)
-    splits = [(d.strftime("%Y-%m-%d"), float(r)) for d, r in t.splits.items()] if t.splits is not None else []
+    cik = None
     try:
-        raw = sec.annual_financials(ticker, splits)
-    except Exception:
-        raw = None
+        cik = sec.cik_for(ticker)
+        raw = sec.annual_financials(ticker, splits) if cik else None
+        company = sec.company_info(cik) if cik else {}
+    except Exception:  # the SEC is sometimes slow or unreachable; the page still works without history
+        raw, company = None, {}
     yearly = yearly_metrics(raw, [(d, c) for d, c, _ in prices]) if raw else []
     usual, growth = window_summary(yearly) if yearly else ({}, {})
+    today, market_cap = today_values(yearly[-1] if yearly else None, price)
+    # Months are labeled by their first day so the stock and the S&P 500 line up month for month.
+    month = lambda d: d[:7] + "-01"
 
     return {
         "ticker": ticker,
-        "name": info.get("longName") or info.get("shortName") or ticker,
-        "sector": info.get("sector"), "industry": info.get("industry"),
-        "currency": info.get("currency", "USD"),
-        "summary": (info.get("longBusinessSummary") or "")[:600],
-        "price": price, "market_cap": num(info.get("marketCap")),
-        "analyst": {"target_mean": num(info.get("targetMeanPrice")), "target_low": num(info.get("targetLowPrice")),
-                    "target_high": num(info.get("targetHighPrice")), "rating": info.get("recommendationKey"),
-                    "num_analysts": info.get("numberOfAnalystOpinions")},
+        "name": info.get("name") or company.get("name") or ticker,
+        "sector": None, "industry": (company.get("industry") or "").title() or None,
+        "currency": "USD",
+        "summary": (info.get("description") or "")[:600],
+        "price": price, "market_cap": market_cap,
+        "analyst": {"target_mean": None, "target_low": None, "target_high": None, "rating": None, "num_analysts": None},
         "has_history": bool(yearly),
         "yearly": yearly,
-        "today": today_values(info, yearly[-1] if yearly else None, price),
+        "today": today,
         "usual": usual, "growth": growth,
-        "peers": peers_for(ticker, info.get("industryKey")),
-        "prices": [{"date": d, "close": round(c, 4), "total": round(a, 4)} for d, c, a in prices],
-        "benchmark": [{"date": d, "total": round(a, 4)} for d, _, a in monthly("SPY")],
+        "peers": peers_for(cik),
+        "prices": [{"date": month(d), "close": round(c, 4), "total": round(a, 4)} for d, c, a in prices],
+        "benchmark": [{"date": month(d), "total": round(a, 4)} for d, _, a in benchmark],
         "ratios": [{"group": g, "key": k, "plain": p, "term": t_, "explain": e, "fmt": f, "better": b}
                    for g, k, p, t_, e, f, b in RATIOS],
         "growth_items": [{"key": k, "plain": p, "term": t_} for k, p, t_ in GROWTH],

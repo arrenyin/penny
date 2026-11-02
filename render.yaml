@@ -14,6 +14,8 @@ services:
         sync: false
       - key: SEC_CONTACT_EMAIL
         sync: false
+      - key: TIINGO_API_KEY
+        sync: false
       - key: SUMMARY_LIMIT_PER_HOUR
         value: "20"
       - key: SUMMARY_LIMIT_PER_DAY

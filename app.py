@@ -17,7 +17,8 @@ if env_file.exists():
         if sep and not key.startswith("#"):
             os.environ.setdefault(key.strip(), value.strip().strip('"'))
 
-import analysis  # noqa: E402  (reads SEC_CONTACT_EMAIL from the environment loaded above)
+import analysis  # noqa: E402  (reads API keys and SEC_CONTACT_EMAIL from the environment loaded above)
+import market  # noqa: E402
 
 MODEL = "claude-haiku-5-5"
 
@@ -166,7 +167,9 @@ def stock(raw):
         return jsonify(error="That doesn't look like a stock symbol."), 400
     try:
         data = get_data(ticker)
-    except Exception as e:  # yfinance and the SEC raise a variety of network/parsing errors
+    except market.MarketDataError as e:
+        return jsonify(error=f"Couldn't load data for {ticker}: {e}"), 502
+    except Exception as e:  # unexpected network or parsing errors
         return jsonify(error=f"Couldn't load data for {ticker}: {e}"), 502
     if not data:
         return jsonify(error=f"No market data found for {ticker}."), 404
