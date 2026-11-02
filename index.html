@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Penny — Stock Research</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1/dist/chartjs-plugin-annotation.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header><div class="wrap">
+  <h1>💰 Penny</h1>
+  <form id="search"><input id="ticker" placeholder="Stock symbol, e.g. AAPL" autocomplete="off" autofocus aria-label="Stock symbol"><button class="primary" id="go">Look it up</button></form>
+  <div class="seg" id="window" role="group" aria-label="Compare over">
+    <span class="seg-label">Compare over</span>
+    <button data-n="3">3 yrs</button><button data-n="5" class="on">5 yrs</button><button data-n="10">10 yrs</button>
+  </div>
+</div></header>
+
+<main class="wrap">
+  <div id="err"></div>
+  <div id="empty" class="empty">
+    <h2>See what's really going on with a stock</h2>
+    <p>Type a company's stock symbol (its short code, like AAPL for Apple). Penny pulls 10 years of official filings and compares every number with the company's own history and its competitors. It also shows what you'd have made, and a rough range for the years ahead.</p>
+    <div class="chips">
+      <button class="chip" data-t="AAPL">AAPL <small>Apple</small></button>
+      <button class="chip" data-t="MSFT">MSFT <small>Microsoft</small></button>
+      <button class="chip" data-t="NVDA">NVDA <small>Nvidia</small></button>
+      <button class="chip" data-t="KO">KO <small>Coca-Cola</small></button>
+      <button class="chip" data-t="JNJ">JNJ <small>Johnson &amp; Johnson</small></button>
+    </div>
+    <p class="loading" id="loading" hidden>Pulling 10 years of filings, prices and competitors…</p>
+  </div>
+
+  <div id="report" hidden>
+    <section class="company">
+      <div><h2 id="name"></h2><div class="sub" id="meta"></div></div>
+      <div class="right"><div class="price" id="price"></div><div class="sub" id="delta"></div></div>
+    </section>
+
+    <section class="card penny">
+      <div class="penny-head">
+        <div><h2>Penny's read on the numbers</h2><p class="hint">A short plain-English summary of everything below.</p></div>
+        <button class="primary" id="summarize">Summarize for me</button>
+      </div>
+      <div id="verdict"></div>
+      <div id="analysis"></div>
+      <div id="qa" class="qa" hidden></div>
+      <form class="ask" id="ask" hidden><input id="question" placeholder="Ask anything, e.g. why did profits drop in 2024?" aria-label="Ask Penny a question"><button class="primary" id="askBtn">Ask</button></form>
+    </section>
+
+    <h2 class="section">The scorecard</h2>
+    <p class="section-hint" id="scoreHint"></p>
+    <div id="nohistory" class="note" hidden>Couldn't get this company's SEC filings (Penny's 10-year data covers US-listed companies, and the SEC is sometimes slow; try again in a minute). Today's figures and prices are still shown.</div>
+    <div class="scorecard" id="scorecard"></div>
+
+    <h2 class="section">Growth</h2>
+    <p class="section-hint">Average growth per year. For "Number of shares", going down is usually good: the company is buying back its own shares, so each one you own is a bigger slice.</p>
+    <div class="card"><div class="table-scroll"><table class="data" id="growth"></table></div></div>
+
+    <h2 class="section">The story in charts</h2>
+    <p class="section-hint">Shaded markers show big events (COVID, the 2022 rate hikes, the AI boom) so you can see how the company held up.</p>
+    <div class="charts" id="charts"></div>
+
+    <h2 class="section">Compared with competitors</h2>
+    <p class="section-hint" id="peerHint"></p>
+    <div class="card"><div class="table-scroll"><table class="data" id="peers"></table></div></div>
+
+    <h2 class="section">What would I have made?</h2>
+    <p class="section-hint">Includes dividends, assuming they were reinvested. Compared with putting the same money in the S&amp;P 500 (the 500 biggest US companies).</p>
+    <div class="card">
+      <form class="calc" id="calc">
+        <label>Starting amount<input id="amount" type="number" min="0" step="100" value="1000"></label>
+        <label>Added each month<input id="monthly" type="number" min="0" step="10" value="0"></label>
+        <label>Starting<select id="since"></select></label>
+      </form>
+      <div class="tiles" id="calcTiles"></div>
+      <div class="chart-box tall"><canvas id="calcChart" role="img" aria-label="Value of the investment over time vs. the S&P 500"></canvas></div>
+    </div>
+
+    <h2 class="section">A rough look ahead</h2>
+    <p class="section-hint">Not a prediction. Nobody can predict prices. This shows the range of outcomes if the future is about as bumpy as this stock's past 10 years. In 8 of 10 simulated futures, the result lands inside the shaded band.</p>
+    <div class="card">
+      <form class="calc" id="proj">
+        <label>How far ahead<select id="years">
+          <option value="1">1 month</option><option value="3">3 months</option><option value="6">6 months</option>
+          <option value="12" selected>1 year</option><option value="36">3 years</option><option value="60">5 years</option><option value="120">10 years</option>
+        </select></label>
+        <label>Growth assumption<select id="assume">
+          <option value="market" selected>Typical stock market (about 10% a year)</option>
+          <option value="cautious">Cautious (about 5% a year)</option>
+          <option value="own">Repeats its own last 10 years</option>
+        </select></label>
+      </form>
+      <p class="hint" id="projNote"></p>
+      <div class="tiles" id="projTiles"></div>
+      <div class="chart-box tall"><canvas id="projChart" role="img" aria-label="Range of possible future values"></canvas></div>
+    </div>
+
+    <footer id="foot"></footer>
+  </div>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

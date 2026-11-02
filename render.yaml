@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: penny
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # One worker keeps the in-memory caches and visitor limits in one place; threads handle concurrent visitors.
+    # The long timeout covers the SEC's slow responses on a company's first lookup.
+    startCommand: gunicorn app:app --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:$PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: SEC_CONTACT_EMAIL
+        sync: false
+      - key: SUMMARY_LIMIT_PER_HOUR
+        value: "20"
+      - key: SUMMARY_LIMIT_PER_DAY
+        value: "500"
