@@ -109,7 +109,8 @@ function renderScorecard() {
   const d = data, n = windowYears, usual = d.usual[n] || {}, peers = d.peers.median || {};
   const recent = d.yearly.slice(-n);
   $("nohistory").hidden = d.has_history;
-  $("scoreHint").textContent = `"Today" is the latest figure. "Usual" is the middle value of the last ${n} years for this company. ` +
+  $("scoreHint").textContent = `"Today" compares today's price with the latest full year of results (for fast-growing companies this can look higher than "last 12 months" figures elsewhere). ` +
+    `"Usual" is the middle value of the last ${n} years for this company. ` +
     `"Peers" is the middle value for ${d.peers.companies.length} competitors. The little line shows the last ${n} years.`;
   $("scorecard").innerHTML = "";
   const groups = {};
@@ -287,7 +288,7 @@ function renderPeers() {
   const d = data, t = $("peers"), cols = [["pe", "P/E", "x"], ["ps", "Price / Sales", "x"], ["pfcf", "Price / Cash left over", "x"],
     ["op_margin", "Operating margin", "pct"], ["net_margin", "Net margin", "pct"], ["div_yield", "Dividend", "pct"]];
   $("peerHint").textContent = d.peers.companies.length
-    ? `The largest companies in the same industry (${d.industry || "same industry"}), using their latest figures.`
+    ? `The largest US-listed companies by sales in the same industry (${d.industry || "same SEC industry code"}), using each company's latest full year of results.`
     : "Couldn't find competitors for this company.";
   t.innerHTML = "";
   const head = t.insertRow();
@@ -443,7 +444,7 @@ function renderProjection() {
 }
 
 function renderFooter() {
-  $("foot").textContent = "Yearly financials from SEC filings (10-K annual reports), adjusted for stock splits. Prices, competitors and today's figures from Yahoo Finance (may be slightly delayed). " +
+  $("foot").textContent = "Yearly financials, industries and competitors from SEC filings (10-K annual reports), adjusted for stock splits. Prices from Tiingo (end of day). " +
     "Fiscal years are labeled by the year they end. Past results don't guarantee future ones. This is research about the stock, not personal financial advice.";
 }
 
